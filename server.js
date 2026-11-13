@@ -14,14 +14,21 @@ const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || '';
 const INSTANCE_NAME = process.env.INSTANCE_NAME || 'ChazquiEnvios';
 const OPERADOR_WHATSAPP = process.env.OPERADOR_WHATSAPP || '';
 
-// LISTA BLANCA (MODO PRUEBAS SEGURO): Solo responderá a estos números
-// Si está vacío o "*", responderá a todos los clientes.
-const WHITELIST_RAW = process.env.WHITELIST_NUMEROS || '51948206358';
-const WHITELIST_NUMEROS = WHITELIST_RAW === '*' 
+// LISTA BLANCA (MODO PRUEBAS): 
+// Si está en "*", vacía o desactivada, responde a cualquiera que escriba.
+const WHITELIST_RAW = process.env.WHITELIST_NUMEROS || '*';
+const WHITELIST_NUMEROS = (WHITELIST_RAW === '*' || !WHITELIST_RAW) 
   ? [] 
   : WHITELIST_RAW.split(',').map(n => n.replace(/[^0-9]/g, '')).filter(Boolean);
 
-console.log(`🔒 [Modo Pruebas] Números autorizados en Lista Blanca:`, WHITELIST_NUMEROS.length > 0 ? WHITELIST_NUMEROS : 'TODOS (Modo Producción)');
+// Buffer de logs recientes en memoria para diagnóstico
+const ultimosLogs = [];
+function registrarLog(tipo, msg) {
+  const item = { hora: new Date().toLocaleTimeString(), tipo, msg };
+  ultimosLogs.unshift(item);
+  if (ultimosLogs.length > 30) ultimosLogs.pop();
+  console.log(`[${item.hora}] [${tipo}] ${msg}`);
+}
 
 // Inicializar el motor del bot
 const botEngine = new RemesasBotEngine();
@@ -119,28 +126,11 @@ app.post('/webhook', async (req, res) => {
     const data = body.data;
     if (!data || !data.key) return;
 
-    // Ignorar mensajes enviados por el propio bot para no crear bucles
-    if (data.key.fromMe) return;
-
-    // Ignorar mensajes de grupos (solo atender chats individuales)
     const remoteJid = data.key.remoteJid || '';
-    if (remoteJid.includes('@g.us')) return;
+    if (remoteJid.includes('@g.us')) return; // Ignorar grupos
 
-    // Extraer número de teléfono del cliente
-    const phoneNumber = remoteJid.replace('@s.whatsapp.net', '').replace(/[^0-9]/g, '');
-
-    // FILTRO DE LISTA BLANCA (MODO PRUEBAS)
-    if (WHITELIST_NUMEROS.length > 0) {
-      const estaAutorizado = WHITELIST_NUMEROS.some(autorizado => {
-        // Coincidencia exacta o coincidencia por los últimos 9 dígitos
-        return phoneNumber === autorizado || phoneNumber.endsWith(autorizado.slice(-9));
-      });
-
-      if (!estaAutorizado) {
-        console.log(`🔒 [Whitelist] Mensaje de cliente real +${phoneNumber} IGNORADO por el bot (Modo Pruebas activo).`);
-        return; // El bot se queda 100% en silencio, no responde nada
-      }
-    }
+    // Limpieza robusta del número de teléfono (remueve sufijos :12 y @s.whatsapp.net)
+    const phoneNumber = remoteJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
 
     // Extraer texto del mensaje
     const message = data.message;
@@ -159,16 +149,35 @@ app.post('/webhook', async (req, res) => {
 
     if (!mensajeTexto || typeof mensajeTexto !== 'string') return;
 
-    console.log(`📩 [WhatsApp Entrante] +${phoneNumber}: "${mensajeTexto}"`);
+    // Si el mensaje fue enviado por el propio número (fromMe: true),
+    // ignorarlo para no crear bucle, SALVO que sea un chat consigo mismo para pruebas.
+    if (data.key.fromMe) {
+      registrarLog('FROM_ME', `Mensaje propio en chat con ${phoneNumber}: "${mensajeTexto}" (ignorado para evitar bucles)`);
+      return;
+    }
+
+    registrarLog('ENTRANTE', `Mensaje de +${phoneNumber}: "${mensajeTexto}"`);
+
+    // FILTRO DE LISTA BLANCA (MODO PRUEBAS)
+    if (WHITELIST_NUMEROS.length > 0) {
+      const estaAutorizado = WHITELIST_NUMEROS.some(autorizado => {
+        return phoneNumber === autorizado || phoneNumber.endsWith(autorizado.slice(-9));
+      });
+
+      if (!estaAutorizado) {
+        registrarLog('WHITELIST_BLOQUEO', `Cliente +${phoneNumber} ignorado (no está en whitelist)`);
+        return;
+      }
+    }
 
     // Procesar con el motor conversacional de ChazquiEnvios
     const resultado = botEngine.procesarMensaje(phoneNumber, mensajeTexto);
 
     if (resultado && resultado.respuesta) {
-      console.log(`📤 [Respuesta Bot] +${phoneNumber} -> Enviando...`);
+      registrarLog('BOT_RESPUESTA', `Enviando a +${phoneNumber}: ${resultado.tipo}`);
       await enviarMensajeWhatsApp(phoneNumber, resultado.respuesta);
     } else if (resultado && resultado.tipo === 'HUMAN_TAKEOVER_ACTIVO') {
-      console.log(`🔕 [Bot Silenciado] +${phoneNumber} está en manos de operador humano. No se responde automáticamente.`);
+      registrarLog('HUMAN_SILENCIO', `+${phoneNumber} en manos de operador.`);
     }
 
   } catch (err) {
@@ -179,6 +188,13 @@ app.post('/webhook', async (req, res) => {
 /**
  * Endpoints de Salud y Estado
  */
+app.get('/api/logs', (req, res) => {
+  res.json({
+    total: ultimosLogs.length,
+    logs: ultimosLogs
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
