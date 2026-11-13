@@ -33,9 +33,10 @@ class RemesasBotEngine {
       peru_paralelo_compra: 3.400,
       peru_paralelo_venta: 3.420,
 
-      // DolarApi.com (Promedios sin decimales)
-      argentina_dolar_blue_promedio: 1560,    // Para Perú -> Argentina
-      argentina_dolar_cripto_promedio: 1654,  // Para Argentina -> Perú
+      // DolarApi.com
+      argentina_dolar_blue_promedio: 1560,    // Para Perú -> Argentina (Promedio sin decimales)
+      argentina_dolar_cripto_compra: 1666,    // Para Argentina -> Perú (Dólar Cripto COMPRA sin decimales)
+      argentina_dolar_cripto_promedio: 1666,
 
       margen_venta_peru_a_arg: 0.01,   // Venta + 0.01 (ej: 3.42 + 0.01 = 3.43)
       margen_compra_arg_a_peru: -0.01, // Compra - 0.01 (ej: 3.40 - 0.01 = 3.39)
@@ -64,8 +65,8 @@ class RemesasBotEngine {
   }
 
   get cambioPesosArgPeru() {
-    // Dólar Cripto promedio sin decimales
-    return Math.round(this.mercado.argentina_dolar_cripto_promedio);
+    // Para Argentina -> Perú: Dólar Cripto COMPRA sin decimales
+    return Math.round(this.mercado.argentina_dolar_cripto_compra || this.mercado.argentina_dolar_cripto_promedio);
   }
 
   actualizarCotizaciones(nuevosDatos) {
@@ -73,6 +74,7 @@ class RemesasBotEngine {
     if (nuevosDatos.peru_paralelo_compra) this.mercado.peru_paralelo_compra = parseFloat(nuevosDatos.peru_paralelo_compra);
     if (nuevosDatos.peru_paralelo_venta) this.mercado.peru_paralelo_venta = parseFloat(nuevosDatos.peru_paralelo_venta);
     if (nuevosDatos.argentina_dolar_blue_promedio) this.mercado.argentina_dolar_blue_promedio = Math.round(parseFloat(nuevosDatos.argentina_dolar_blue_promedio));
+    if (nuevosDatos.argentina_dolar_cripto_compra) this.mercado.argentina_dolar_cripto_compra = Math.round(parseFloat(nuevosDatos.argentina_dolar_cripto_compra));
     if (nuevosDatos.argentina_dolar_cripto_promedio) this.mercado.argentina_dolar_cripto_promedio = Math.round(parseFloat(nuevosDatos.argentina_dolar_cripto_promedio));
     this.mercado.ultima_sincronizacion = new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
   }
@@ -101,15 +103,18 @@ class RemesasBotEngine {
   }
 
   // CÁLCULO EXACTO DE REMESA CON COMISIÓN DEL 4%
-  calcularCotizacion(rutaKey, totalPagar) {
+  // tipo: "ENVIAR" (monto a pagar) o "RECIBIR" (monto neto a recibir en destino)
+  calcularCotizacion(rutaKey, monto, tipo = "ENVIAR") {
+    let totalPagar = 0;
+    let montoNeto = 0;
+    let montoComision = 0;
+    let montoDolares = 0;
+    let montoRecibir = 0;
+
     const factorComision = 1 + (this.comision_porcentaje / 100); // 1.04
-    const montoNeto = totalPagar / factorComision;
-    const montoComision = totalPagar - montoNeto;
 
     let cambioSoles = 0;
     let cambioPesos = 0;
-    let montoDolares = 0;
-    let montoRecibir = 0;
     let cuentaTransferir = null;
     let paisDestino = "";
     let banderaDestino = "";
@@ -129,10 +134,24 @@ class RemesasBotEngine {
       cambioPesos = this.cambioPesosArgPeru; // Dólar Cripto promedio sin decimales
       cambioSoles = this.cambioSolesArgPeru; // CuantoEstaElDolar Compra - 0.01
 
-      // 1. Pesos netos a Dólares
-      montoDolares = montoNeto / cambioPesos;
-      // 2. Dólares a Soles
-      montoRecibir = Math.round((montoDolares * cambioSoles) * 100) / 100;
+      if (tipo === "RECIBIR") {
+        // El cliente especificó cuánto quiere que LLEGUE en Soles (ej: 96 soles)
+        montoRecibir = Math.round(monto * 100) / 100;
+        // 1. Dólares necesarios
+        montoDolares = montoRecibir / cambioSoles;
+        // 2. Pesos netos requeridos
+        montoNeto = montoDolares * cambioPesos;
+        // 3. Total a pagar con comisión del 4% incluida
+        totalPagar = Math.round(montoNeto * factorComision);
+        montoComision = totalPagar - Math.round(montoNeto);
+      } else {
+        // El cliente especificó cuánto va a PAGAR en Pesos (ej: 400.000 pesos)
+        totalPagar = Math.round(monto);
+        montoNeto = totalPagar / factorComision;
+        montoComision = totalPagar - montoNeto;
+        montoDolares = montoNeto / cambioPesos;
+        montoRecibir = Math.round((montoDolares * cambioSoles) * 100) / 100;
+      }
 
     } else {
       // PERU_A_ARGENTINA
@@ -146,19 +165,36 @@ class RemesasBotEngine {
       cambioSoles = this.cambioSolesPeruArg; // CuantoEstaElDolar Venta + 0.01
       cambioPesos = this.cambioPesosPeruArg; // Dólar Blue promedio sin decimales
 
-      // 1. Soles netos a Dólares
-      montoDolares = montoNeto / cambioSoles;
-      // 2. Dólares a Pesos (sin decimales)
-      montoRecibir = Math.round(montoDolares * cambioPesos);
+      if (tipo === "RECIBIR") {
+        // El cliente especificó cuánto quiere que LLEGUE en Pesos (ej: 45000 pesos)
+        montoRecibir = Math.round(monto);
+        // 1. Dólares necesarios
+        montoDolares = montoRecibir / cambioPesos;
+        // 2. Soles netos requeridos
+        montoNeto = montoDolares * cambioSoles;
+        // 3. Total a pagar en Soles con comisión del 4%
+        totalPagar = Math.round((montoNeto * factorComision) * 100) / 100;
+        montoComision = Math.round((totalPagar - montoNeto) * 100) / 100;
+      } else {
+        // El cliente especificó cuánto va a PAGAR en Soles (ej: 30 soles)
+        totalPagar = monto;
+        montoNeto = totalPagar / factorComision;
+        montoComision = totalPagar - montoNeto;
+        montoDolares = montoNeto / cambioSoles;
+        montoRecibir = Math.round(montoDolares * cambioPesos);
+      }
     }
 
+    // Hora exacta del sistema en ese momento (zona horaria configurable, por defecto Perú/Argentina)
+    const timeZone = process.env.TIMEZONE || (rutaKey === "ARGENTINA_A_PERU" ? "America/Argentina/Buenos_Aires" : "America/Lima");
     const ahora = new Date();
-    const fechaStr = ahora.toLocaleDateString("es-PE", { day: "2-digit", month: "2-digit", year: "numeric" });
-    const horaStr = ahora.toLocaleTimeString("es-PE", { hour: "numeric", minute: "2-digit", hour12: true }).toLowerCase();
+    const fechaStr = ahora.toLocaleDateString("es-PE", { day: "2-digit", month: "2-digit", year: "numeric", timeZone });
+    const horaStr = ahora.toLocaleTimeString("es-PE", { hour: "numeric", minute: "2-digit", hour12: true, timeZone }).toLowerCase();
 
     return {
       numCotizacion,
       rutaKey,
+      tipoCotizacion: tipo,
       paisDestino,
       banderaDestino,
       monedaPago,
@@ -191,6 +227,12 @@ class RemesasBotEngine {
       ? Math.round(cot.montoRecibir).toLocaleString("es") 
       : cot.montoRecibir.toFixed(2);
 
+    // Hora de sistema en el momento exacto de emisión
+    const timeZone = process.env.TIMEZONE || (cot.rutaKey === "ARGENTINA_A_PERU" ? "America/Argentina/Buenos_Aires" : "America/Lima");
+    const ahora = new Date();
+    const fechaActual = ahora.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone });
+    const horaActual = ahora.toLocaleTimeString("es-AR", { hour: "numeric", minute: "2-digit", hour12: true, timeZone }).toLowerCase();
+
     return (
 `💸 *${this.empresa}*
 Cotización N°: ${cot.numCotizacion} ✅
@@ -210,7 +252,7 @@ Comisión: ${this.comision_porcentaje}% (${comisionFmt} ${cot.monedaPago})
 👉 Enviar comprobante por aquí.
 📌 Cotización valida por ${cot.horasValidez} horas.
 
-Fecha: ${cot.fechaStr}   ${cot.horaStr}`
+Fecha: ${fechaActual}   ${horaActual}`
     );
   }
 
@@ -237,26 +279,67 @@ Fecha: ${cot.fechaStr}   ${cot.horaStr}`
     return alertData;
   }
 
-  // DETECCIÓN RÁPIDA DE INTENCIÓN Y MONTO
+  // DETECTAR INTELIGENTEMENTE SI EL MONTO ES PARA ENVIAR O PARA RECIBIR
+  analizarMontoYTipo(texto, rutaKey) {
+    const t = (texto || "").toLowerCase();
+
+    // Extraer número
+    const matchNumero = t.match(/\d+([.,]\d+)?/);
+    if (!matchNumero) return null;
+    const monto = parseFloat(matchNumero[0].replace(",", "."));
+    if (isNaN(monto) || monto <= 0) return null;
+
+    let tipo = "ENVIAR";
+
+    const mencionaSoles = t.includes("sol") || t.includes("soles") || t.includes("pen") || t.includes("s/");
+    const mencionaPesos = t.includes("peso") || t.includes("pesos") || t.includes("ars");
+    const mencionaRecibir = t.includes("recib") || t.includes("llegue") || t.includes("llegar") || t.includes("cobrar");
+    const mencionaEnviar = t.includes("enviar") || t.includes("mandar") || t.includes("pagar") || t.includes("transferir");
+
+    if (rutaKey === "ARGENTINA_A_PERU") {
+      // Origen = Pesos (enviar) | Destino = Soles (recibir)
+      if (mencionaSoles || mencionaRecibir) {
+        tipo = "RECIBIR";
+      } else if (mencionaPesos || mencionaEnviar) {
+        tipo = "ENVIAR";
+      } else {
+        // Si escribe un número pequeño (ej: 96, 100, 250), son Soles a recibir
+        // Si escribe un número grande (ej: 45000, 400000), son Pesos a enviar
+        tipo = monto < 2500 ? "RECIBIR" : "ENVIAR";
+      }
+    } else {
+      // PERU_A_ARGENTINA
+      // Origen = Soles (enviar) | Destino = Pesos (recibir)
+      if (mencionaPesos || mencionaRecibir) {
+        tipo = "RECIBIR";
+      } else if (mencionaSoles || mencionaEnviar) {
+        tipo = "ENVIAR";
+      } else {
+        // Si escribe un número grande (ej: 45000), son Pesos a recibir
+        // Si escribe un número pequeño (ej: 30, 50, 200), son Soles a enviar
+        tipo = monto >= 2500 ? "RECIBIR" : "ENVIAR";
+      }
+    }
+
+    return { monto, tipo };
+  }
+
+  // DETECCIÓN RÁPIDA DE INTENCIÓN Y MONTO AL INICIO
   intentarParseoDirecto(texto) {
     const t = texto.toLowerCase();
     let ruta = null;
 
-    if ((t.includes("peru") && t.includes("argentina")) || t.includes("soles a pesos") || t.includes("soles")) {
-      if (t.includes("de argentina a peru") || t.includes("pesos a soles")) {
-        ruta = "ARGENTINA_A_PERU";
-      } else {
-        ruta = "PERU_A_ARGENTINA";
-      }
-    } else if (t.includes("pesos") || t.includes("ars")) {
+    if (t.includes("arg") || t.includes("argentina a peru") || t.includes("pesos a soles")) {
       ruta = "ARGENTINA_A_PERU";
+    } else if (t.includes("peru") || t.includes("peru a arg") || t.includes("soles a pesos")) {
+      ruta = "PERU_A_ARGENTINA";
     }
 
-    const matchNumero = t.match(/\d+([.,]\d+)?/);
-    const monto = matchNumero ? parseFloat(matchNumero[0].replace(",", ".")) : null;
-
-    if (ruta && monto && monto > 0) {
-      return { ruta, monto };
+    if (ruta) {
+      const parsed = this.analizarMontoYTipo(texto, ruta);
+      if (parsed) {
+        return { ruta, monto: parsed.monto, tipo: parsed.tipo };
+      }
     }
     return null;
   }
@@ -295,45 +378,35 @@ Fecha: ${cot.fechaStr}   ${cot.horaStr}`
         const parseo = this.intentarParseoDirecto(texto);
         if (parseo) {
           session.ruta = parseo.ruta;
-          return this.generarRespuestaCotizacion(session, parseo.monto);
+          return this.generarRespuestaCotizacion(session, parseo.monto, parseo.tipo);
         }
         session.step = "SELECCION_RUTA";
         return this.responderMenuPrincipal(session);
       }
 
       case "SELECCION_RUTA": {
-        if (texto === "1" || textoLower.includes("peru a arg") || textoLower.includes("soles")) {
-          session.ruta = "PERU_A_ARGENTINA";
-          session.step = "ESPERANDO_MONTO";
-          return {
-            tipo: "BOT_TEXTO",
-            respuesta: 
-`🇵🇪 ➔ 🇦🇷 *Envío desde Perú hacia Argentina*
-━━━━━━━━━━━━━━━━━━━━
-📊 *Tasas en tiempo real:*
-• Cambio Soles (Venta + 0.01): *${this.cambioSolesPeruArg}*
-• Cambio Pesos (Dólar Blue): *${this.cambioPesosPeruArg.toLocaleString("es")}*
-• Comisión de servicio: *4%*
-
-💬 *Por favor escribe el monto en Soles (PEN) que deseas transferir:*
-_(Ejemplo: 30 o 500)_`,
-            session
-          };
-        } else if (texto === "2" || textoLower.includes("arg a peru") || textoLower.includes("pesos")) {
+        if (texto === "1" || textoLower.includes("arg a peru") || textoLower.includes("pesos")) {
           session.ruta = "ARGENTINA_A_PERU";
           session.step = "ESPERANDO_MONTO";
           return {
             tipo: "BOT_TEXTO",
             respuesta: 
 `🇦🇷 ➔ 🇵🇪 *Envío desde Argentina hacia Perú*
-━━━━━━━━━━━━━━━━━━━━
-📊 *Tasas en tiempo real:*
-• Cambio Pesos (Dólar Cripto): *${this.cambioPesosArgPeru.toLocaleString("es")}*
-• Cambio Soles (Compra - 0.01): *${this.cambioSolesArgPeru}*
-• Comisión de servicio: *4%*
 
-💬 *Por favor escribe el monto en Pesos (ARS) que deseas transferir:*
-_(Ejemplo: 400000)_`,
+💬 *Por favor escribe el monto que quieres enviar o recibir:*
+_(Ejemplo: 45000 pesos o 96 soles)_`,
+            session
+          };
+        } else if (texto === "2" || textoLower.includes("peru a arg") || textoLower.includes("soles")) {
+          session.ruta = "PERU_A_ARGENTINA";
+          session.step = "ESPERANDO_MONTO";
+          return {
+            tipo: "BOT_TEXTO",
+            respuesta: 
+`🇵🇪 ➔ 🇦🇷 *Envío desde Perú hacia Argentina*
+
+💬 *Por favor escribe el monto que quieres enviar o recibir:*
+_(Ejemplo: 30 soles o 45000 pesos)_`,
             session
           };
         } else if (texto === "3" || textoLower.includes("asesor")) {
@@ -346,22 +419,22 @@ _(Ejemplo: 400000)_`,
         } else {
           return {
             tipo: "BOT_TEXTO",
-            respuesta: `⚠️ Por favor responde con el número:\n\n1️⃣ Perú ➔ Argentina (Soles a Pesos)\n2️⃣ Argentina ➔ Perú (Pesos a Soles)\n3️⃣ Hablar con un asesor`,
+            respuesta: `⚠️ Por favor responde con el número:\n\n1️⃣ Argentina ➔ Perú (Pesos a Soles)\n2️⃣ Perú ➔ Argentina (Soles a Pesos)\n3️⃣ Hablar con un asesor`,
             session
           };
         }
       }
 
       case "ESPERANDO_MONTO": {
-        const montoLimpio = parseFloat(texto.replace(/[^0-9.,]/g, "").replace(",", "."));
-        if (isNaN(montoLimpio) || montoLimpio <= 0) {
+        const parsed = this.analizarMontoYTipo(texto, session.ruta);
+        if (!parsed || parsed.monto <= 0) {
           return {
             tipo: "BOT_TEXTO",
-            respuesta: `⚠️ No pude reconocer el número. Por favor ingresa solo la cifra numérica a cotizar (ej: 400000).`,
+            respuesta: `⚠️ No pude reconocer el monto. Por favor escribe la cantidad que deseas enviar o recibir (ejemplo: 45000 pesos o 96 soles).`,
             session
           };
         }
-        return this.generarRespuestaCotizacion(session, montoLimpio);
+        return this.generarRespuestaCotizacion(session, parsed.monto, parsed.tipo);
       }
 
       case "COTIZACION_ACTIVA": {
@@ -373,12 +446,8 @@ _(Ejemplo: 400000)_`,
           const ticketOficial = this.generarTicketTexto(session.cotizacionActual);
           const alertaOperador = this.triggerHumanTakeover(session);
 
-          const mensajeSalida = 
-`${ticketOficial}
-
-━━━━━━━━━━━━━━━━━━━━
-👨‍💼 *Un asesor humano de ChazquiEnvios ya está en este chat.*
-_Por favor realiza la transferencia a la cuenta indicada arriba y envía tu comprobante aquí para que validemos la acreditación y realicemos el pago en destino de inmediato._`;
+          // Se envía únicamente el ticket oficial (termina en la Fecha)
+          const mensajeSalida = ticketOficial;
 
           return {
             tipo: "TICKET_GENERADO_HUMANO",
@@ -386,11 +455,11 @@ _Por favor realiza la transferencia a la cuenta indicada arriba y envía tu comp
             respuesta: mensajeSalida,
             session
           };
-        } else if (texto === "2" || textoLower.includes("recotizar") || textoLower.includes("otro monto")) {
+        } else if (texto === "2" || textoLower.includes("cotizar nuevamente") || textoLower.includes("recotizar") || textoLower.includes("otro monto") || textoLower.includes("nuevo")) {
           session.step = "ESPERANDO_MONTO";
           return {
             tipo: "BOT_TEXTO",
-            respuesta: `🔄 *Recotización:*\n\nPor favor escribe el nuevo monto a cotizar:`,
+            respuesta: `🔄 *Cotizar nuevamente:*\n\nPor favor escribe el monto que quieres enviar o recibir:`,
             session
           };
         } else if (texto === "3" || textoLower.includes("asesor")) {
@@ -404,7 +473,7 @@ _Por favor realiza la transferencia a la cuenta indicada arriba y envía tu comp
         } else {
           return {
             tipo: "BOT_TEXTO",
-            respuesta: `💬 ¿Deseas hacer efectiva esta cotización y recibir tu ticket de pago?\n\n1️⃣ *SÍ, PROCEDER Y GENERAR TICKET* (te pasamos los datos para transferir)\n2️⃣ *RECOTIZAR OTRO MONTO*\n3️⃣ *HABLAR CON UN ASESOR*`,
+            respuesta: `⚠️ Escribir el número adecuado:\n\n1️⃣ Proceder con el envío\n2️⃣ Cotizar nuevamente\n3️⃣ Hablar con un asesor`,
             session
           };
         }
@@ -417,8 +486,8 @@ _Por favor realiza la transferencia a la cuenta indicada arriba y envía tu comp
   }
 
   // Pre-cotización (Resumen antes de emitir el ticket formal con número)
-  generarRespuestaCotizacion(session, monto) {
-    const cot = this.calcularCotizacion(session.ruta, monto);
+  generarRespuestaCotizacion(session, monto, tipo = "ENVIAR") {
+    const cot = this.calcularCotizacion(session.ruta, monto, tipo);
     session.cotizacionActual = cot;
     session.step = "COTIZACION_ACTIVA";
 
@@ -440,11 +509,11 @@ Envió a: ${cot.banderaDestino} *${cot.paisDestino}*
 • Cambio pesos: *${cot.cambioPesos.toLocaleString("es")}*
 📌 Cotización válida por *2 horas*.
 ━━━━━━━━━━━━━━━━━━━━
-¿Deseas concretar el envío y recibir los datos de transferencia?
+Escribir el número adecuado:
 
-1️⃣ *SÍ, PROCEDER CON EL ENVÍO* (Generar ticket de pago)
-2️⃣ *RECOTIZAR OTRO MONTO*
-3️⃣ *HABLAR CON UN ASESOR*`;
+1️⃣ Proceder con el envío
+2️⃣ Cotizar nuevamente
+3️⃣ Hablar con un asesor`;
 
     return {
       tipo: "COTIZACION_GENERADA",
@@ -463,11 +532,11 @@ Cotiza tu envío de dinero al instante con las mejores tasas:
 
 ¿Hacia dónde deseas enviar hoy?
 
-1️⃣ 🇵🇪 ➔ 🇦🇷 *Perú a Argentina* (Pagas en Soles ➔ Reciben Pesos)
-   _Cambio soles: ${this.cambioSolesPeruArg} | Cambio pesos: ${this.cambioPesosPeruArg.toLocaleString("es")}_
-
-2️⃣ 🇦🇷 ➔ 🇵🇪 *Argentina a Perú* (Pagas en Pesos ➔ Reciben Soles)
+1️⃣ 🇦🇷 ➔ 🇵🇪 *Argentina a Perú* (Pagas en Pesos ➔ Reciben Soles)
    _Cambio pesos: ${this.cambioPesosArgPeru.toLocaleString("es")} | Cambio soles: ${this.cambioSolesArgPeru}_
+
+2️⃣ 🇵🇪 ➔ 🇦🇷 *Perú a Argentina* (Pagas en Soles ➔ Reciben Pesos)
+   _Cambio soles: ${this.cambioSolesPeruArg} | Cambio pesos: ${this.cambioPesosPeruArg.toLocaleString("es")}_
 
 3️⃣ 👨‍💼 *Hablar con un asesor humano*
 
