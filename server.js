@@ -14,6 +14,15 @@ const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || '';
 const INSTANCE_NAME = process.env.INSTANCE_NAME || 'ChazquiEnvios';
 const OPERADOR_WHATSAPP = process.env.OPERADOR_WHATSAPP || '';
 
+// LISTA BLANCA (MODO PRUEBAS SEGURO): Solo responderá a estos números
+// Si está vacío o "*", responderá a todos los clientes.
+const WHITELIST_RAW = process.env.WHITELIST_NUMEROS || '51948206358';
+const WHITELIST_NUMEROS = WHITELIST_RAW === '*' 
+  ? [] 
+  : WHITELIST_RAW.split(',').map(n => n.replace(/[^0-9]/g, '')).filter(Boolean);
+
+console.log(`🔒 [Modo Pruebas] Números autorizados en Lista Blanca:`, WHITELIST_NUMEROS.length > 0 ? WHITELIST_NUMEROS : 'TODOS (Modo Producción)');
+
 // Inicializar el motor del bot
 const botEngine = new RemesasBotEngine();
 
@@ -118,7 +127,20 @@ app.post('/webhook', async (req, res) => {
     if (remoteJid.includes('@g.us')) return;
 
     // Extraer número de teléfono del cliente
-    const phoneNumber = remoteJid.replace('@s.whatsapp.net', '');
+    const phoneNumber = remoteJid.replace('@s.whatsapp.net', '').replace(/[^0-9]/g, '');
+
+    // FILTRO DE LISTA BLANCA (MODO PRUEBAS)
+    if (WHITELIST_NUMEROS.length > 0) {
+      const estaAutorizado = WHITELIST_NUMEROS.some(autorizado => {
+        // Coincidencia exacta o coincidencia por los últimos 9 dígitos
+        return phoneNumber === autorizado || phoneNumber.endsWith(autorizado.slice(-9));
+      });
+
+      if (!estaAutorizado) {
+        console.log(`🔒 [Whitelist] Mensaje de cliente real +${phoneNumber} IGNORADO por el bot (Modo Pruebas activo).`);
+        return; // El bot se queda 100% en silencio, no responde nada
+      }
+    }
 
     // Extraer texto del mensaje
     const message = data.message;
@@ -223,6 +245,12 @@ app.get('/', (req, res) => {
         <span class="text-slate-400">Evolution API Configurada:</span>
         <span class="font-mono ${EVOLUTION_API_URL ? 'text-emerald-400' : 'text-amber-400'}">
           ${EVOLUTION_API_URL ? 'Conectada (' + INSTANCE_NAME + ')' : 'Pendiente .env'}
+        </span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Modo Pruebas (Lista Blanca):</span>
+        <span class="font-mono text-emerald-400 font-bold">
+          ${WHITELIST_NUMEROS.length > 0 ? 'Activo (+' + WHITELIST_NUMEROS.join(', +') + ')' : 'Desactivado (Responde a todos)'}
         </span>
       </div>
       <div class="flex justify-between">
