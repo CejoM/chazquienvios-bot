@@ -1,0 +1,32 @@
+{
+  "empresa": "ChazquiEnvios",
+  "tiempo_validez_horas": 2,
+  "comision_porcentaje": 4.0,
+  "cuentas_bancarias": {
+    "PERU_PAGO_EN_SOLES": {
+      "tipo_cuenta": "Cuenta para transferir",
+      "numero_cuenta": "948206358",
+      "titular": "Jesus Juarez",
+      "banco": "Yape"
+    },
+    "ARGENTINA_PAGO_EN_PESOS": {
+      "tipo_cuenta": "Alias para transferir",
+      "numero_cuenta": "jesus.maia.bb",
+      "titular": "Jesus Juarez",
+      "banco": "Banco Ciudad"
+    }
+  },
+  "apis": {
+    "peru": {
+      "fuente": "CuantoEstaElDolar.pe",
+      "mercado": "Paralelo",
+      "margen_venta": 0.01,
+      "margen_compra": -0.01
+    },
+    "argentina": {
+      "fuente": "DolarApi.com",
+      "blue_promedio_sin_decimales": true,
+      "cripto_promedio_sin_decimales": true
+    }
+  }
+}
